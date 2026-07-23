@@ -1,0 +1,16 @@
+{
+  "failed_stage": "B.6_invoke_agent_workflow",
+  "error_code": "AgentTimeout",
+  "error_message": "Foundry agent /agents/priority did not respond within 30s",
+  "http_status": 504,
+  "occurred_at": "2026-07-23T10:15:32Z",
+  "attempt_number": 2
+}
+
+for multiple attempts:
+{
+  "attempts": [
+    { "attempt": 1, "failed_stage": "B6_invoke_agent_workflow", "error_code": "AgentTimeout", "occurred_at": "2026-07-23T09:00:00Z" },
+    { "attempt": 2, "failed_stage": "B9_post_case_creation", "error_code": "MuleSoftAuthError", "occurred_at": "2026-07-23T09:15:00Z" }
+  ]
+}
