@@ -1,0 +1,11 @@
+# func_recovery (Function D, SQL-backed case-intake pipeline) dependencies.
+azure-functions
+pyodbc>=5.1
+
+# Used by recovery/dead_letters.py (peeks case-intake-ingestion's dead-letter
+# sub-queue every run — see that file for why) via the same "CaseIntakeServiceBus"
+# managed-identity auth func_orchestrate already uses. Also what
+# ServiceBusRecoveryPublisher (recovery/publisher.py) would use if Service
+# Bus publishing is ever turned on.
+azure-identity>=1.19
+azure-servicebus>=7.11
