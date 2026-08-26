@@ -57,6 +57,8 @@ from typing import Any
 
 import pyodbc
 
+from . import telemetry
+
 logger = logging.getLogger(__name__)
 
 # Local/manual-run fallback only — matches sb-case-intake-dev exactly, so
@@ -196,11 +198,14 @@ def scan_dead_letters(max_messages: int = 50) -> DeadLetterOutcome:
 
     summaries = [_summarize(m) for m in messages]
     logger.info("dead-letter scan: %s message(s) in %s", len(summaries), queue_name)
-    for summary in summaries:
-        # Full detail (body_preview etc.) is in the returned messages list for
-        # the caller to inspect/print — DEBUG here so a routine peek doesn't
-        # flood INFO-level logs, but the id is still traceable if needed.
-        logger.debug("dead-letter: message_id=%s activity_id=%s", summary["message_id"], summary["activity_id"])
+
+    for message, summary in zip(messages, summaries):
+        with telemetry.message_scope(message):
+            # Full detail (body_preview etc.) is in the returned messages
+            # list for the caller to inspect/print — DEBUG here so a
+            # routine peek doesn't flood INFO-level logs, but the id is
+            # still traceable if needed.
+            logger.debug("dead-letter: message_id=%s activity_id=%s", summary["message_id"], summary["activity_id"])
 
     return DeadLetterOutcome(found=len(summaries), messages=summaries)
 
@@ -302,54 +307,55 @@ def process_dead_letters(sql_connection_string: str | None = None, max_messages:
             outcome.found = len(messages)
 
             for message in messages:
-                summary = _summarize(message)
-                activity_id = summary["activity_id"]
+                with telemetry.message_scope(message):
+                    summary = _summarize(message)
+                    activity_id = summary["activity_id"]
 
-                if not activity_id:
-                    receiver.abandon_message(message)
-                    summary["action"] = "skipped_no_activity_id"
-                    outcome.skipped += 1
-                    outcome.messages.append(summary)
-                    logger.debug("dead-letter skipped, no activity_id: message_id=%s", summary["message_id"])
-                    continue
+                    if not activity_id:
+                        receiver.abandon_message(message)
+                        summary["action"] = "skipped_no_activity_id"
+                        outcome.skipped += 1
+                        outcome.messages.append(summary)
+                        logger.debug("dead-letter skipped, no activity_id: message_id=%s", summary["message_id"])
+                        continue
 
-                try:
-                    if _email_instance_exists(sql_connection_string, activity_id):
-                        # Don't re-run B.1 for an activity_id that already has a
-                        # row — but if cia_queue_item is still missing for it
-                        # (e.g. an earlier revival wrote email_instance but died
-                        # before B.2), backfill just that piece.
-                        if _queue_item_exists(sql_connection_string, activity_id):
-                            receiver.abandon_message(message)
-                            summary["action"] = "skipped_already_exists"
-                            outcome.skipped += 1
-                            logger.debug("dead-letter skipped, already exists: activity_id=%s", activity_id)
+                    try:
+                        if _email_instance_exists(sql_connection_string, activity_id):
+                            # Don't re-run B.1 for an activity_id that already has a
+                            # row — but if cia_queue_item is still missing for it
+                            # (e.g. an earlier revival wrote email_instance but died
+                            # before B.2), backfill just that piece.
+                            if _queue_item_exists(sql_connection_string, activity_id):
+                                receiver.abandon_message(message)
+                                summary["action"] = "skipped_already_exists"
+                                outcome.skipped += 1
+                                logger.debug("dead-letter skipped, already exists: activity_id=%s", activity_id)
+                            else:
+                                _write_queue_item(sql_connection_string, activity_id)
+                                receiver.complete_message(message)
+                                summary["action"] = "queue_item_backfilled"
+                                outcome.processed += 1
+                                logger.info("dead-letter queue_item backfilled: activity_id=%s", activity_id)
                         else:
-                            _write_queue_item(sql_connection_string, activity_id)
+                            new_email_instance_id, skip_queueitem_write = _run_b1_write(sql_connection_string, activity_id)
+                            if not skip_queueitem_write:
+                                _write_queue_item(sql_connection_string, activity_id)
                             receiver.complete_message(message)
-                            summary["action"] = "queue_item_backfilled"
+                            summary["action"] = "processed"
+                            summary["email_instance_id"] = new_email_instance_id
                             outcome.processed += 1
-                            logger.info("dead-letter queue_item backfilled: activity_id=%s", activity_id)
-                    else:
-                        new_email_instance_id, skip_queueitem_write = _run_b1_write(sql_connection_string, activity_id)
-                        if not skip_queueitem_write:
-                            _write_queue_item(sql_connection_string, activity_id)
-                        receiver.complete_message(message)
-                        summary["action"] = "processed"
-                        summary["email_instance_id"] = new_email_instance_id
-                        outcome.processed += 1
-                        logger.info(
-                            "dead-letter processed: activity_id=%s -> email_instance_id=%s",
-                            activity_id, new_email_instance_id,
-                        )
-                except Exception as exc:
-                    receiver.abandon_message(message)
-                    summary["action"] = "failed"
-                    summary["error"] = str(exc)
-                    outcome.failed += 1
-                    logger.exception("dead-letter revival failed for activity_id=%s", activity_id)
+                            logger.info(
+                                "dead-letter processed: activity_id=%s -> email_instance_id=%s",
+                                activity_id, new_email_instance_id,
+                            )
+                    except Exception as exc:
+                        receiver.abandon_message(message)
+                        summary["action"] = "failed"
+                        summary["error"] = str(exc)
+                        outcome.failed += 1
+                        logger.exception("dead-letter revival failed for activity_id=%s", activity_id)
 
-                outcome.messages.append(summary)
+                    outcome.messages.append(summary)
     finally:
         client.close()
 

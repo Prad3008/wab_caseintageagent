@@ -30,6 +30,13 @@ STORAGE_CONTAINER="${STORAGE_CONTAINER:-stzenonwabeus2}"
 SCM_HOST="${FUNCTION_APP}-fde7dybtdkaqf3cr.scm.eastus2-01.azurewebsites.net"
 OVERLAY_DIRS=(func_case_intake_recovery recovery orchestrator)
 NEW_DEPENDENCIES=(pyodbc azure-servicebus)
+# azure-monitor-opentelemetry was added by an earlier deploy, then removed
+# outright (not just from correlation_id) per a client preference to move
+# away from OpenTelemetry. Listed here so THIS deploy actively strips it
+# back out of the live requirements.txt this script downloads — leaving it
+# only out of NEW_DEPENDENCIES would just stop ADDING it if missing, not
+# remove it if a prior deploy already added it (which one did).
+REMOVED_DEPENDENCIES=(azure-monitor-opentelemetry)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -80,6 +87,12 @@ done
 
 echo "==> [4/6] Ensuring requirements.txt has this function's dependencies"
 REQ="${MERGED_DIR}/requirements.txt"
+for pkg in "${REMOVED_DEPENDENCIES[@]}"; do
+  if grep -qi "^${pkg}" "$REQ"; then
+    grep -vi "^${pkg}" "$REQ" > "${REQ}.tmp" && mv "${REQ}.tmp" "$REQ"
+    echo "  removed no-longer-needed dependency: $pkg"
+  fi
+done
 for pkg in "${NEW_DEPENDENCIES[@]}"; do
   if ! grep -qi "^${pkg}" "$REQ"; then
     printf '\n%s\n' "$pkg" >> "$REQ"

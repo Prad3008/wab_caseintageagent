@@ -53,6 +53,7 @@ Two entry points, two very different risk levels:
 | 7 | `orchestrator/__init__.py` | Exposes `run_from_stage` — the package's public entry point |
 | 8 | `orchestrator/spine.py` | The actual B.1–B.9 steps (currently a dummy stand-in — see below), run once per stuck row |
 | 9 | `recovery/dead_letters.py` | The dead-letter scan and revival logic — entirely independent of files 3–8, deliberately kept in its own file so it can be reviewed/changed/removed without touching the running SQL scan. May import `config.py` read-only (for the SQL connection string); never the reverse |
+| 10 | `recovery/telemetry.py` | `message_scope(message)` — a `with`-block used only in `recovery/dead_letters.py`, giving one dead-letter message's logs their own `correlation_id` (distinguishing it from other messages in the same invocation, which `operation_Id` alone can't do). Every entry point imports this module purely for its side effect (installing the `correlation_id` `LogRecord` factory); ordinary invocation-level logs stay at `correlation_id=-`, relying on Azure's own `operation_Id` for invocation-level grouping. No OpenTelemetry/Azure Monitor dependency of any kind |
 
 
 
@@ -184,6 +185,14 @@ If the query returns 5 stuck rows, each one gets retried (subject to the cap) an
 | `local_run.py` | **Yes** — runs the SQL stuck-writes scan, which now really retries every stuck row found (subject to `max_retry_attempts`) via `StuckEmailFinder.retry()` (pops a browser login the first time) |
 | `local_run_dead_letters.py` | No — `scan_dead_letters()`, pure peek |
 | `local_run_process_dead_letters.py` | **Yes** — `process_dead_letters()`, the same active revive-and-complete logic the deployed timer runs |
+
+## Telemetry / correlation_id
+
+`correlation_id` is deliberately **not** generated at the invocation level — Azure Functions already tags every invocation's logs with a real `operation_Id` natively, for free (see `Functions/LOG_FLOW.md`), so a second, self-generated id for the same purpose would be pure duplication. All four entry points above import `recovery.telemetry` purely for its side effect (installing the `correlation_id` `LogRecord` factory); ordinary logs from `run_recovery()`, `recovery.service`, `recovery.stuck_emails`, etc. all show `correlation_id=-`, relying on `operation_Id` for invocation-level grouping.
+
+The one place `correlation_id` becomes genuinely useful: `recovery/dead_letters.py` opens a nested scope per message while processing dead letters, via `with telemetry.message_scope(message):` — using that message's own native Service Bus `.correlation_id` property if the publisher set one, otherwise a freshly generated `uuid4`. This is the one thing `operation_Id` can't do on its own: distinguish two different dead-letter messages handled within the *same* invocation, which would otherwise share the same `operation_Id`. The moment the `with` block ends (normal completion, `continue`, or an exception — doesn't matter which), `correlation_id` automatically goes back to `-`, with no manual restore step to forget.
+
+**No OpenTelemetry/Azure Monitor dependency exists anywhere in this codebase.** Three iterations existed at different points and were all simplified away — sourcing correlation_id from OpenTelemetry's trace_id (never once worked in practice), then keeping `configure_azure_monitor()` just for Service Bus dependency tracing (dropped per a client preference to move away from OpenTelemetry entirely), then finally dropping the self-generated whole-invocation id itself once it was recognized as pure duplication of `operation_Id`. See `recovery/TELEMETRY.md`'s "History" section for the full reasoning behind each.
 
 ## Not yet wired up
 

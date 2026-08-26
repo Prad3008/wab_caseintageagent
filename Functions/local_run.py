@@ -21,11 +21,17 @@ import logging
 import sys
 
 from recovery import run_recovery
+import recovery.telemetry  # noqa: F401 — side effect only: installs the correlation_id LogRecord factory used by recovery.dead_letters.message_scope()
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s %(name)s [correlation_id=%(correlation_id)s]: %(message)s",
+)
 
 
 def main() -> int:
+    logging.info("local_run invoked")
+
     summary = run_recovery()
 
     print("\n=== Stuck writes ===")

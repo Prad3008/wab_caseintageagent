@@ -27,8 +27,12 @@ import logging
 import sys
 
 from recovery.dead_letters import process_dead_letters
+import recovery.telemetry  # noqa: F401 — side effect only: installs the correlation_id LogRecord factory used by recovery.dead_letters.message_scope()
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s %(name)s [correlation_id=%(correlation_id)s]: %(message)s",
+)
 # The Service Bus SDK's own AMQP protocol logging (connection/link/session
 # state changes) is extremely chatty at INFO — quiet it so only our own
 # recovery.* log lines (and real Azure SDK warnings/errors) show up.
@@ -37,6 +41,8 @@ for _noisy in ("azure.servicebus", "azure.identity", "azure.core.pipeline.polici
 
 
 def main() -> int:
+    logging.info("local_run_process_dead_letters invoked")
+
     outcome = process_dead_letters()
 
     print("\n=== Dead letter processing ===")

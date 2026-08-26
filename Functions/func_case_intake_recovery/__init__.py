@@ -36,6 +36,7 @@ if _func_app_root not in sys.path:
 
 from recovery import run_recovery  # noqa: E402
 from recovery.dead_letters import process_dead_letters  # noqa: E402
+import recovery.telemetry  # noqa: E402,F401 — side effect only: installs the correlation_id LogRecord factory used by recovery.dead_letters.message_scope()
 
 # The Service Bus SDK's own AMQP protocol logging (connection/link/session
 # state changes) is extremely chatty at INFO — quiet it so Application
@@ -46,6 +47,8 @@ for _noisy in ("azure.servicebus", "azure.identity", "azure.core.pipeline.polici
 
 
 def main(timer: func.TimerRequest) -> None:
+    logging.info("func_case_intake_recovery invoked")
+
     if timer.past_due:
         logging.warning("func_case_intake_recovery: timer is past due")
 
